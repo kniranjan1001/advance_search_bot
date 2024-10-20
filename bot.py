@@ -183,17 +183,18 @@ async def broadcast_message(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text("Unauthorized! Only the admin can use this command.")
 
-
 # Function to handle user list display (admin only)
 async def user_list_command(update: Update, context: CallbackContext):
     if update.message.chat_id == ADMIN_USER_ID:
         user_list = "\n".join([str(user_id) for user_id in user_ids])
         await update.message.reply_text(f"List of connected users:\n{user_list or 'No users connected.'}")
 
-
 def main() -> None:
     application = Application.builder().token(BOT_TOKEN).build()
-    webhook_url = f"https://middleman-k8jr.onrender.com/{BOT_TOKEN}"
+    webhook_url = f"https://advance-search-bot.vercel.app/{BOT_TOKEN}"
+
+    # Set webhook
+    application.bot.set_webhook(url=webhook_url)
 
     # Add command handlers
     application.add_handler(CommandHandler("start", start_command))
@@ -207,9 +208,8 @@ def main() -> None:
     # Add callback query handler for button presses
     application.add_handler(CallbackQueryHandler(button_callback))
 
- 
-    # Run the bot
-    application.run_polling()
+    # Start the webhook
+    application.run_webhook(listen="0.0.0.0", port=int(os.environ.get('PORT', '8443')), url_path=BOT_TOKEN)
 
 if __name__ == '__main__':
     main()
