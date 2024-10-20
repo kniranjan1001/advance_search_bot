@@ -1,9 +1,9 @@
+from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext
 import logging
 import requests
 import os
-import asyncio
 
 # Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -16,6 +16,12 @@ JSON_URL = os.getenv('JSON_URL')  # URL where your JSON data is stored
 
 # A global set to store unique user IDs
 user_ids = set()
+
+# Create FastAPI app instance
+app = FastAPI()
+
+# Initialize the Telegram application
+telegram_app = Application.builder().token(BOT_TOKEN).build()
 
 # Function to fetch movie data from JSON URL
 def fetch_movie_data():
@@ -30,115 +36,33 @@ def fetch_movie_data():
 # Function to search for the movie in the JSON data
 async def search_movie_in_json(movie_name: str):
     try:
-        # Fetch movie data from the JSON URL
         movie_data = fetch_movie_data()
-
-        # Initialize a list to hold button objects
         buttons = []
-
-        # Iterate through movie data and create buttons
         for key, value in movie_data.items():
             if movie_name.lower() in key.lower():
                 buttons.append(InlineKeyboardButton(text=key, url=value))
-
-        # Create the inline keyboard markup
         if buttons:
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[[button] for button in buttons])
-            return keyboard
+            return InlineKeyboardMarkup(inline_keyboard=[[button] for button in buttons])
         else:
-            return "Movie not found! 😿 \n👉 Please check the spelling or send the exact name.\n👉 If it's still missing, kindly search @cc_new_movie 🎬"
+            return "Movie not found! 😿 Please check the spelling or send the exact name."
     except Exception as e:
         logger.error(f"Error searching movie data: {e}")
-        return "An error😿 occurred while searching for the movie."
+        return "An error occurred while searching for the movie."
 
-# Function to delete the message after a delay
-async def delete_message(context: CallbackContext):
-    job_data = context.job.data
-    message_id = job_data['message_id']
-    chat_id = job_data['chat_id']
+# Function to handle incoming webhook requests from Telegram
+@app.post(f"/{BOT_TOKEN}")
+async def handle_webhook(request: Request):
     try:
-        logger.info(f"Deleting message {message_id} from chat {chat_id}")
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-        logger.info(f"Message {message_id} deleted successfully.")
+        update_data = await request.json()
+        update = Update.de_json(update_data, telegram_app.bot)
+        await telegram_app.process_update(update)
+        return {"status": "ok"}
     except Exception as e:
-        logger.error(f"Failed to delete message {message_id}: {e}")
-
-# Function to store user IDs
-async def add_user_id(update: Update):
-    user_id = update.message.chat_id
-    if user_id not in user_ids:
-        user_ids.add(user_id)
-        logger.info(f"New user added: {user_id}")
-
-# Function to handle movie search requests
-async def search_movie(update: Update, context: CallbackContext) -> None:
-    await add_user_id(update)
-    movie_name = update.message.text.strip()
-
-    # Show 'typing' action to indicate loading
-    await context.bot.send_chat_action(chat_id=update.message.chat_id, action='typing')
-
-    # Send a creative message with simulated loading
-    loading_message = await update.message.reply_text("🔍 Searching the movie vaults... 🍿 Hang tight while we find your movie! 🎬")
-
-    # Search for the movie in the JSON data
-    result = await search_movie_in_json(movie_name)
-
-    if isinstance(result, InlineKeyboardMarkup):
-        # Edit the loading message with the result
-        response_message = await loading_message.edit_text(f"Search🔍 results for '{movie_name}' 🍿 :", reply_markup=result)
-        
-        # Log when the job is scheduled
-        logger.info(f"Scheduling deletion for message {response_message.message_id} in chat {update.message.chat_id} after 60 seconds.")
-        
-        # Schedule message deletion after 1 minute (60 seconds)
-        context.job_queue.run_once(delete_message, 60, data={'message_id': response_message.message_id, 'chat_id': update.message.chat_id})
-
-    else:
-        # Edit the loading message with the error message
-        response_message = await loading_message.edit_text(result)
-        
-        # Log when the job is scheduled
-        logger.info(f"Scheduling deletion for message {response_message.message_id} in chat {update.message.chat_id} after 60 seconds.")
-        
-        # Schedule message deletion after 1 minute (60 seconds)
-        context.job_queue.run_once(delete_message, 60, context={'message_id': response_message.message_id, 'chat_id': update.message.chat_id})
-
-# Function to handle the '/search <movie_name>' command
-async def search_command(update: Update, context: CallbackContext) -> None:
-    if context.args:
-        movie_name = " ".join(context.args).strip()
-        await context.bot.send_chat_action(chat_id=update.message.chat_id, action='typing')
-
-        # Send loading message
-        loading_message = await update.message.reply_text("🔍 Crunching through the movie vault... 🍿 Please hold on while we grab your movie magic! 🎥")
-
-        movie_result = await search_movie_in_json(movie_name)
-
-        if isinstance(movie_result, InlineKeyboardMarkup):
-            # Edit the loading message with the result
-            response_message = await loading_message.edit_text(f"Search 🔍 results for '{movie_name}'🍿:", reply_markup=movie_result)
-            
-            # Log when the job is scheduled
-            logger.info(f"Scheduling deletion for message {response_message.message_id} in chat {update.message.chat_id} after 60 seconds.")
-            
-            # Schedule message deletion after 1 minute (60 seconds)
-            context.job_queue.run_once(delete_message, 60, context={'message_id': response_message.message_id, 'chat_id': update.message.chat_id})
-        else:
-            # Edit the loading message with an error message
-            response_message = await loading_message.edit_text(movie_result)
-            
-            # Log when the job is scheduled
-            logger.info(f"Scheduling deletion for message {response_message.message_id} in chat {update.message.chat_id} after 60 seconds.")
-            
-            # Schedule message deletion after 1 minute (60 seconds)
-            context.job_queue.run_once(delete_message, 60, context={'message_id': response_message.message_id, 'chat_id': update.message.chat_id})
-    else:
-        await update.message.reply_text("Please provide a movie name. Usage: /search <movie_name>")
+        logger.error(f"Error processing the update: {e}")
+        return {"status": "error", "message": str(e)}
 
 # Function to handle the '/start' command
 async def start_command(update: Update, context: CallbackContext) -> None:
-    await add_user_id(update)
     about_button = InlineKeyboardButton(text="About🧑‍💻", callback_data='about')
     request_movie_button = InlineKeyboardButton(text="Request Movie😇", url='https://t.me/anonyms_middle_man_bot')
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[about_button], [request_movie_button]])
@@ -150,6 +74,16 @@ async def start_command(update: Update, context: CallbackContext) -> None:
        "Enjoy your content😎"
     )
     await update.message.reply_text(welcome_message, reply_markup=keyboard)
+
+# Function to search for a movie
+async def search_movie(update: Update, context: CallbackContext) -> None:
+    movie_name = update.message.text.strip()
+    result = await search_movie_in_json(movie_name)
+
+    if isinstance(result, InlineKeyboardMarkup):
+        await update.message.reply_text(f"Search results for '{movie_name}' 🍿:", reply_markup=result)
+    else:
+        await update.message.reply_text(result)
 
 # Function to handle button callbacks
 async def button_callback(update: Update, context: CallbackContext) -> None:
@@ -172,9 +106,6 @@ async def broadcast_message(update: Update, context: CallbackContext):
             for user_id in user_ids:
                 try:
                     await context.bot.send_message(chat_id=user_id, text=message)
-                except telegram.error.Forbidden:
-                    logger.warning(f"User {user_id} has blocked the bot. Removing from user list.")
-                    user_ids.remove(user_id)  # Remove blocked user from the set
                 except Exception as e:
                     logger.error(f"Failed to send message to {user_id}: {e}")
             await update.message.reply_text("Message broadcasted to all users!")
@@ -189,27 +120,11 @@ async def user_list_command(update: Update, context: CallbackContext):
         user_list = "\n".join([str(user_id) for user_id in user_ids])
         await update.message.reply_text(f"List of connected users:\n{user_list or 'No users connected.'}")
 
-def main() -> None:
-    application = Application.builder().token(BOT_TOKEN).build()
-    webhook_url = f"https://advance-search-bot.vercel.app/{BOT_TOKEN}"
+# Add handlers to the Telegram application
+telegram_app.add_handler(CommandHandler("start", start_command))
+telegram_app.add_handler(CommandHandler("broadcast", broadcast_message))
+telegram_app.add_handler(CommandHandler("userlist", user_list_command))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_movie))
+telegram_app.add_handler(CallbackQueryHandler(button_callback))
 
-    # Set webhook
-    application.bot.set_webhook(url=webhook_url)
-
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("search", search_command))
-    application.add_handler(CommandHandler("broadcast", broadcast_message))
-    application.add_handler(CommandHandler("userlist", user_list_command))
-    
-    # Add message handler for text messages
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_movie))
-    
-    # Add callback query handler for button presses
-    application.add_handler(CallbackQueryHandler(button_callback))
-
-    # Start the webhook
-    application.run_webhook(listen="0.0.0.0", port=int(os.environ.get('PORT', '8443')), url_path=BOT_TOKEN)
-
-if __name__ == '__main__':
-    main()
+# In your Vercel setup, you'll use this FastAPI app to handle webhooks
