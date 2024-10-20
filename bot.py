@@ -3,6 +3,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 import logging
 import requests
 import os
+import asyncio
 
 # Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -52,7 +53,7 @@ async def search_movie_in_json(movie_name: str):
 
 # Function to delete the message after a delay
 async def delete_message(context: CallbackContext):
-    job_data = context.job.context
+    job_data = context.job.data
     message_id = job_data['message_id']
     chat_id = job_data['chat_id']
     try:
@@ -91,7 +92,8 @@ async def search_movie(update: Update, context: CallbackContext) -> None:
         logger.info(f"Scheduling deletion for message {response_message.message_id} in chat {update.message.chat_id} after 60 seconds.")
         
         # Schedule message deletion after 1 minute (60 seconds)
-        context.job_queue.run_once(delete_message, 60, context={'message_id': response_message.message_id, 'chat_id': update.message.chat_id})
+        context.job_queue.run_once(delete_message, 60, data={'message_id': response_message.message_id, 'chat_id': update.message.chat_id})
+
     else:
         # Edit the loading message with the error message
         response_message = await loading_message.edit_text(result)
@@ -164,13 +166,15 @@ async def button_callback(update: Update, context: CallbackContext) -> None:
 
 # Function to handle broadcasting messages
 async def broadcast_message(update: Update, context: CallbackContext):
-    # Check if the command is from the admin
     if update.message.chat_id == ADMIN_USER_ID:
         message = " ".join(context.args)
         if message:
             for user_id in user_ids:
                 try:
                     await context.bot.send_message(chat_id=user_id, text=message)
+                except telegram.error.Forbidden:
+                    logger.warning(f"User {user_id} has blocked the bot. Removing from user list.")
+                    user_ids.remove(user_id)  # Remove blocked user from the set
                 except Exception as e:
                     logger.error(f"Failed to send message to {user_id}: {e}")
             await update.message.reply_text("Message broadcasted to all users!")
@@ -179,15 +183,17 @@ async def broadcast_message(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text("Unauthorized! Only the admin can use this command.")
 
+
 # Function to handle user list display (admin only)
 async def user_list_command(update: Update, context: CallbackContext):
     if update.message.chat_id == ADMIN_USER_ID:
         user_list = "\n".join([str(user_id) for user_id in user_ids])
         await update.message.reply_text(f"List of connected users:\n{user_list or 'No users connected.'}")
 
-# Main function to run the bot
+
 def main() -> None:
     application = Application.builder().token(BOT_TOKEN).build()
+    webhook_url = f"https://middleman-k8jr.onrender.com/{BOT_TOKEN}"
 
     # Add command handlers
     application.add_handler(CommandHandler("start", start_command))
@@ -201,6 +207,7 @@ def main() -> None:
     # Add callback query handler for button presses
     application.add_handler(CallbackQueryHandler(button_callback))
 
+ 
     # Run the bot
     application.run_polling()
 
